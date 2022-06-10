@@ -1,0 +1,8 @@
+version: "3.9"
+services:
+  R:
+    image: ghcr.io/rocker-org/geospatial:4.2.0
+    volumes:
+      - ./:/mnt
+    ports:
+      - 8787:8787	
