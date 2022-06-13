@@ -1,0 +1,130 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+```{r}
+library(rgdal)
+library(tidyverse)
+library(raster)
+library(spdplyr)
+library(ggspatial)
+library(scales)
+library(grid)
+```
+
+Load data
+
+```{r}
+# reprojected via gdal
+# `gdalwarp -t_srs EPSG:4326 nlcd2016_ny.tif nlcd2016_ny-4326.tif`
+nlcd <- raster::raster('/mnt/data/nlcd2016_ny-4326.tif')
+substations <- rgdal::readOGR("/mnt/data/usa_electric_substations.kml")
+states <- rgdal::readOGR('/mnt/data/usa_states.geojson.json')
+```
+
+Filter for NY
+```{r}
+substations_ny <- substations %>% filter(STATE == "NY", STATUS == "IN SERVICE")
+ny_boundary <- filter(states, NAME == "New York")
+```
+
+Basic map of substations within NY state
+```{r}
+ggplot() + layer_spatial(ny_boundary) + layer_spatial(substations_ny)
+```
+
+Zoom in for a more local look
+```{r}
+bbox <- extent(c(-73.97000,-73.699465,41.098891, 41.333389))
+nlcd_zoom <- crop(nlcd, bbox)
+```
+
+```{r}
+nlcd_zoom_df <- as.data.frame(nlcd_zoom, xy = TRUE)
+nlcd_zoom_df <- mutate(nlcd_zoom_df, landtype = as.factor(nlcd2016_ny.4326))
+ggplot(nlcd_zoom_df) + geom_raster(aes(x=x, y=y, fill=landtype)) + layer_spatial(substations_ny) + xlim(-73.97000,-73.699465) + ylim(41.098891, 41.333389)
+```
+
+```{r}
+buffer <- raster::buffer(substations_ny, width=3218.69, dissolve=TRUE) # 2mi in meters
+```
+
+```{r}
+nlcd_buffer <- mask(nlcd, buffer)
+```
+
+```{r}
+plot(nlcd_buffer)
+```
+
+```{r}
+all_state_landuse <- getValues(nlcd) %>% table()
+buffer_landuse <- getValues(nlcd_buffer) %>% table()
+```
+
+```{r}
+nlcd_types <- read_csv('/mnt/rmd/NLCD_classes.csv') %>% mutate(code = as.factor(code))
+```
+```{r}
+# via https://github.com/grattan/grattantheme/blob/master/R/watermark.R
+watermark <- function(watermark, fontsize = 120,
+                          colour = "grey90", alpha = 0.05,
+                          fontface = "bold", angle = 22) {
+  watermark_grob <- textGrob(watermark, gp = gpar(fontsize = fontsize, colour = colour,
+                                      alpha = alpha, fontface = fontface),
+                   rot = angle)
+
+  annotation_custom(grob = watermark_grob)
+}
+```
+
+```{r}
+df <-as.data.frame(buffer_landuse) %>% 
+  tibble() %>% 
+  rename(code=1, count=2) %>%
+  inner_join(nlcd_types, on=code) %>% 
+  mutate(sqmi = count * 0.000347492) # 30m^2 -> sq mile
+
+nlcd_colors <- pull(df, hex_color)
+names(nlcd_colors) <- pull(df, code)
+
+df %>%
+  ggplot() + 
+  geom_col(aes(fill=code, x=category, y=sqmi), position = 'stack') +
+  scale_fill_manual(values = nlcd_colors) +
+  geom_text(aes(x=category, group=code, y=sqmi, label=description), size=3, 
+  position = position_stack(vjust = 0.5)) +
+  scale_y_continuous(label=comma) +
+  ylab("Sq miles") + 
+  xlab("NLCD Category") +
+  ggtitle('NLCD land type within 2 miles of NY substations', 
+          subtitle = "Win Climate, 2022") +
+  watermark("Draft") +
+  theme(legend.position="none")
+```
+
+```{r}
+df <-as.data.frame(all_state_landuse) %>% 
+  tibble() %>% 
+  rename(code=1, count=2) %>%
+  inner_join(nlcd_types, on=code) %>% 
+  mutate(sqmi = count * 0.000347492) # 30m^2 -> sq mile
+
+nlcd_colors <- pull(df, hex_color)
+names(nlcd_colors) <- pull(df, code)
+
+df %>%
+  ggplot() + 
+  geom_col(aes(fill=code, x=category, y=sqmi), position = 'stack') +
+  scale_fill_manual(values = nlcd_colors) +
+  geom_text(aes(x=category, group=code, y=sqmi, label=description), size=3, 
+    position = position_stack(vjust = 0.5)) +
+  scale_y_continuous(label=comma) +
+  ylab("Sq miles") + 
+  xlab("NLCD Category") +
+  theme(legend.position="none") +
+    watermark("Draft") +
+  ggtitle('NLCD land type across all NY state')
+```

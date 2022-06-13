@@ -1,8 +1,12 @@
 version: "3.9"
 services:
-  R:
-    image: ghcr.io/rocker-org/geospatial:4.2.0
+  r:
+    build:
+      context: .
+      dockerfile: Dockerfile
     volumes:
       - ./:/mnt
     ports:
       - 8787:8787	
+    environment:
+      - PASSWORD=solar
