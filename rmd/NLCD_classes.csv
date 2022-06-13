@@ -1,0 +1,21 @@
+code,category,description,r,g,b,hex_color
+11,Water,Water,72,109,163,#486DA3
+12,Ice/Snow,Ice/Snow,230,239,252,#E6EFFC
+21,Developed,Open Space,225,205,206,#E1CDCE
+22,Developed,Low Intensity,220,152,129,#DC9881
+23,Developed,Medium Intensity,241,1,1,#F10101
+24,Developed,High Intensity,172,0,0,#AC0000
+31,Barren,Barren,179,175,164,#B3AFA4
+41,Forest,Deciduous,109,169,102,#6DA966
+42,Forest,Evergreen,28,101,51,#1C6533
+43,Forest,Mixed,189,203,147,#BDCB93
+51,Scrub,Dwarf Scrub,179,155,67,#B39B43
+52,Scrub,Shrub/Scrub,209,187,130,#D1BB82
+71,Herbaceous,Grassland,237,236,205,#EDECCD
+72,Herbaceous,Sedge,208,209,129,#D0D181
+73,Herbaceous,Lichens,164,204,79,#A4CC4F
+74,Herbaceous,Moss,130,186,157,#82BA9D
+81,Agricultural,Pasture/Hay,224,224,73,#E0E049
+82,Agricultural,Crops,174,114,41,#AE7229
+90,Wetlands,Woody Wetlands,187,215,237,#BBD7ED
+95,Wetlands,Emergent Wetlands,113,164,193,#71A4C1
