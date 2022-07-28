@@ -3,9 +3,10 @@ See [Solar Farm Siting](https://coda.io/d/Win-Climate_dj19izTK-3l/Solar-Farm-Sit
 [R GIS Background info](https://geocompr.robinlovelace.net/index.html)
 
 Data files to add to `data/`:
-- `EPSG:4326 nlcd2016_ny.tif nlcd2016`
+- `nlcd2016_ny.tif`
 - `usa_electric_substations.kml`
 - `usa_states.geojson.json`
+- `Electric_Power_Transmission_Lines.geojson`
 
 Quick start:
 - Install docker

@@ -1,72 +1,130 @@
 ---
 title: "R Notebook"
-output: html_notebook
+output:
+  pdf_document: default
 ---
 
 
 ```{r}
-library(rgdal)
-library(tidyverse)
-library(raster)
-library(spdplyr)
+library(sf)
+library(stars)
 library(ggspatial)
 library(scales)
 library(grid)
+library(forcats)
+library(tidyverse)
 ```
 
-Load data
+## Load data
 
 ```{r}
-# reprojected via gdal
-# `gdalwarp -t_srs EPSG:4326 nlcd2016_ny.tif nlcd2016_ny-4326.tif`
-nlcd <- raster::raster('/mnt/data/nlcd2016_ny-4326.tif')
-substations <- rgdal::readOGR("/mnt/data/usa_electric_substations.kml")
-states <- rgdal::readOGR('/mnt/data/usa_states.geojson.json')
-```
+# read the NLCD data, pull out its coordinate system
+# note this is a stars_proxy object because it's too large
+nlcd <- stars::read_stars('/mnt/data/nlcd2016_ny.tif')
+nlcd_coords <- st_crs(nlcd)
 
-Filter for NY
-```{r}
-substations_ny <- substations %>% filter(STATE == "NY", STATUS == "IN SERVICE")
-ny_boundary <- filter(states, NAME == "New York")
+nlcd_types <- read_csv('/mnt/rmd/NLCD_classes.csv') %>% 
+  mutate(description = fct_reorder(description, code),
+         code = as.factor(code))
+
+# substations
+substations <- sf::read_sf('/mnt/data/usa_electric_substations.kml')
+substations_ny <- filter(substations, STATE == "NY", STATUS == "IN SERVICE") %>% 
+  st_transform(nlcd_coords)
+
+# state boundaries
+states <- sf::read_sf('/mnt/data/usa_states.geojson.json')
+ny_boundary <- filter(states, NAME == "New York") %>% 
+  st_transform(nlcd_coords)
+
+# pull out ny state boundaries untransformed for use next
+ny_boundary_latlng <- filter(states, NAME == "New York")
+
+# transmission lines
+transmission_lines_ny <- sf::read_sf('/mnt/data/Electric_Power_Transmission_Lines.geojson') %>%
+  filter(VOLTAGE >= 230) %>% #230 kV on up means high voltage transmission; note some are missing voltage, they're excluded
+  st_intersection(ny_boundary_latlng) %>%
+  st_transform(nlcd_coords)
 ```
 
 Basic map of substations within NY state
 ```{r}
-ggplot() + layer_spatial(ny_boundary) + layer_spatial(substations_ny)
+ggplot() + layer_spatial(ny_boundary) + layer_spatial(substations_ny) + layer_spatial(transmission_lines_ny)
+```
+
+## Buffer
+
+Make a two mile buffer around all substations, 1 mile around transmission lines
+```{r}
+substation_buffer <- st_buffer(substations_ny, units::as_units('2mi'))
+transmission_line_buffer <- st_buffer(transmission_lines_ny, units::as_units('1mi'))
+buffer_together <- bind_rows(list(transmission_line_buffer %>% select(geometry), 
+                                  substation_buffer %>% select(geometry))) %>%
+                   st_union()
+```
+
+What percentage of NY state land is covered by our buffer zone?
+
+```{r}
+st_area(buffer_together) / st_area(ny_boundary)
+```
+
+
+## Land use types in buffer
+
+Pull out colors for future use
+```{r}
+nlcd_colors <- pull(nlcd_types, hex_color)
+names(nlcd_colors) <- pull(nlcd_types, description)
 ```
 
 Zoom in for a more local look
 ```{r}
-bbox <- extent(c(-73.97000,-73.699465,41.098891, 41.333389))
-nlcd_zoom <- crop(nlcd, bbox)
+ossining = c(xmin=-73.97, ymin=41.09, xmax=-73.69, ymax=41.33)
+bbox <- st_bbox(ossining, crs=4326) %>% 
+      st_as_sfc() %>% 
+      st_transform(nlcd_coords)
+nlcd_zoom <- st_crop(nlcd, bbox) %>% st_as_stars() # crop and change from proxy to full stars
 ```
 
 ```{r}
-nlcd_zoom_df <- as.data.frame(nlcd_zoom, xy = TRUE)
-nlcd_zoom_df <- mutate(nlcd_zoom_df, landtype = as.factor(nlcd2016_ny.4326))
-ggplot(nlcd_zoom_df) + geom_raster(aes(x=x, y=y, fill=landtype)) + layer_spatial(substations_ny) + xlim(-73.97000,-73.699465) + ylim(41.098891, 41.333389)
+nlcd_zoom %>%
+  as_tibble() %>%
+  mutate(code = as.factor(nlcd2016_ny.tif)) %>%
+  left_join(nlcd_types, by = 'code') %>%
+  ggplot(aes(x=x, y=y, fill=description)) + 
+  geom_raster() + 
+  scale_fill_manual(values=nlcd_colors) +
+  layer_spatial(transmission_lines_ny %>% st_crop(bbox)) + 
+  layer_spatial(substations_ny %>% st_crop(bbox))
+  
 ```
 
 ```{r}
-buffer <- raster::buffer(substations_ny, width=3218.69, dissolve=TRUE) # 2mi in meters
+nlcd_zoom[buffer_together] %>%
+  as_tibble() %>%
+  mutate(code = as.factor(nlcd2016_ny.tif)) %>%
+  left_join(nlcd_types, by = 'code') %>%
+  ggplot(aes(x=x, y=y, fill=description)) + 
+  geom_raster() + 
+  scale_fill_manual(values=nlcd_colors) +
+  layer_spatial(transmission_lines_ny %>% st_crop(bbox)) + 
+  layer_spatial(substations_ny %>% st_crop(bbox))
 ```
+Zoom out to all of NY State
 
 ```{r}
-nlcd_buffer <- mask(nlcd, buffer)
+nlcd[buffer_together] %>%
+  st_as_stars(downsample=10) %>%
+  as_tibble() %>%
+  mutate(code = as.factor(nlcd2016_ny.tif)) %>%
+  left_join(nlcd_types, by = 'code') %>%
+  ggplot(aes(x=x, y=y, fill=description)) + 
+  geom_raster() + 
+  scale_fill_manual(values=nlcd_colors)
 ```
 
-```{r}
-plot(nlcd_buffer)
-```
 
-```{r}
-all_state_landuse <- getValues(nlcd) %>% table()
-buffer_landuse <- getValues(nlcd_buffer) %>% table()
-```
-
-```{r}
-nlcd_types <- read_csv('/mnt/rmd/NLCD_classes.csv') %>% mutate(code = as.factor(code))
-```
 ```{r}
 # via https://github.com/grattan/grattantheme/blob/master/R/watermark.R
 watermark <- function(watermark, fontsize = 120,
@@ -80,51 +138,103 @@ watermark <- function(watermark, fontsize = 120,
 }
 ```
 
+To speed things up, we work with a downsampled grid, doesn't make any difference for the relative proportions at this scale
 ```{r}
-df <-as.data.frame(buffer_landuse) %>% 
-  tibble() %>% 
-  rename(code=1, count=2) %>%
-  inner_join(nlcd_types, on=code) %>% 
-  mutate(sqmi = count * 0.000347492) # 30m^2 -> sq mile
+nlcd_downsample <- 10
+```
 
-nlcd_colors <- pull(df, hex_color)
-names(nlcd_colors) <- pull(df, code)
-
-df %>%
-  ggplot() + 
-  geom_col(aes(fill=code, x=category, y=sqmi), position = 'stack') +
-  scale_fill_manual(values = nlcd_colors) +
+```{r}
+nlcd[buffer_together] %>%
+  pull(nlcd2016_ny.tif) %>%
+  st_as_stars(downsample = nlcd_downsample) %>%
+  table() %>%
+  as_tibble() %>%
+  rename(code = 1) %>%
+  mutate(n_adj = nlcd_downsample*n) %>%
+  inner_join(nlcd_types, by = 'code') %>%
+  mutate(sqmi = n_adj * 0.00347492) %>% # 30m^2 -> sq mile
+  ggplot() +
+  geom_col(aes(fill=description, x=category, y=sqmi), position='stack') +
+  scale_fill_manual(values = nlcd_colors) + 
   geom_text(aes(x=category, group=code, y=sqmi, label=description), size=3, 
-  position = position_stack(vjust = 0.5)) +
+          position = position_stack(vjust = 0.5)) +
   scale_y_continuous(label=comma) +
   ylab("Sq miles") + 
   xlab("NLCD Category") +
-  ggtitle('NLCD land type within 2 miles of NY substations', 
+  ggtitle('NLCD land type within 2 miles of NY substations / 1 mile of 230kV+ lines', 
           subtitle = "Win Climate, 2022") +
   watermark("Draft") +
   theme(legend.position="none")
 ```
 
+Not restricted to buffer around stations
+
 ```{r}
-df <-as.data.frame(all_state_landuse) %>% 
-  tibble() %>% 
-  rename(code=1, count=2) %>%
-  inner_join(nlcd_types, on=code) %>% 
-  mutate(sqmi = count * 0.000347492) # 30m^2 -> sq mile
-
-nlcd_colors <- pull(df, hex_color)
-names(nlcd_colors) <- pull(df, code)
-
-df %>%
-  ggplot() + 
-  geom_col(aes(fill=code, x=category, y=sqmi), position = 'stack') +
-  scale_fill_manual(values = nlcd_colors) +
+nlcd %>%
+  pull(nlcd2016_ny.tif) %>%
+  st_as_stars(downsample = nlcd_downsample) %>%
+  table() %>%
+  as_tibble() %>%
+  rename(code = 1) %>%
+  mutate(n_adj = nlcd_downsample*n) %>%
+  inner_join(nlcd_types, by = 'code') %>%
+  mutate(sqmi = n_adj * 0.00347492) %>% # 30m^2 -> sq mile
+  ggplot() +
+  geom_col(aes(fill=description, x=category, y=sqmi), position='stack') +
+  scale_fill_manual(values = nlcd_colors) + 
   geom_text(aes(x=category, group=code, y=sqmi, label=description), size=3, 
-    position = position_stack(vjust = 0.5)) +
+          position = position_stack(vjust = 0.5)) +
   scale_y_continuous(label=comma) +
   ylab("Sq miles") + 
   xlab("NLCD Category") +
-  theme(legend.position="none") +
-    watermark("Draft") +
-  ggtitle('NLCD land type across all NY state')
+  ggtitle('NLCD land type across NY State', 
+          subtitle = "Win Climate, 2022") +
+  watermark("Draft") +
+  theme(legend.position="none")
+```
+
+```{r, fig.width=10}
+landuse_buffer <- nlcd[buffer_together] %>%
+  pull(nlcd2016_ny.tif) %>%
+  st_as_stars(downsample = nlcd_downsample) %>%
+  table() %>%
+  as_tibble() %>%
+  rename(code = 1) %>%
+  mutate(n_adj = nlcd_downsample*n) %>%
+  inner_join(nlcd_types, by = 'code') %>%
+  mutate(sqmi_buffer = n_adj * 0.00347492) # 30m^2 -> sq mile
+
+landuse <- nlcd %>%
+  pull(nlcd2016_ny.tif) %>%
+  st_as_stars(downsample = nlcd_downsample) %>%
+  table() %>%
+  as_tibble() %>%
+  rename(code = 1) %>%
+  mutate(n_adj = nlcd_downsample*n) %>%
+  inner_join(nlcd_types, by = 'code') %>%
+  mutate(sqmi = n_adj * 0.00347492) # 30m^2 -> sq mile
+
+landuse %>%
+  inner_join(landuse_buffer, by = 'code') %>%
+  mutate(description = description.x, 
+         category = category.x) %>%
+  filter(!category %in% c("Water", "Wetlands", "Developed")) %>%
+  mutate(total_sqmi = sum(sqmi)) %>%
+  group_by(category) %>%
+  summarize(buffer_sqmi = sum(sqmi_buffer), 
+            category_sqmi = sum(sqmi),
+            total_sqmi = first(total_sqmi),
+            pct_category_in_buffer = buffer_sqmi / category_sqmi,
+            pct_in_buffer_nys = buffer_sqmi / total_sqmi,
+            pct_300sqmi = 300/buffer_sqmi)
+
+```
+If we don’t want to cut down trees, only 10% of undeveloped NYS land is buildable (i.e. rural land close to grid). 
+
+That represents a third of all the agricultural land.
+
+## Slope
+
+```{r}
+library(raster)
 ```
